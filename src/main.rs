@@ -2,14 +2,9 @@ use std::{net::Ipv4Addr, time::Duration};
 
 use futures::StreamExt;
 use libp2p::{
-    core::muxing::StreamMuxerBox,
-    dcutr, identify,
-    identity::Keypair,
-    kad::{self, store::MemoryStore},
-    multiaddr::Protocol,
-    noise, ping, relay,
-    swarm::NetworkBehaviour,
-    tcp, yamux, Multiaddr, PeerId, SwarmBuilder, Transport as _,
+    core::muxing::StreamMuxerBox, dcutr, identify, identity::Keypair, kad, multiaddr::Protocol,
+    noise, ping, relay, swarm::NetworkBehaviour, tcp, yamux, Multiaddr, PeerId, StreamProtocol,
+    SwarmBuilder, Transport as _,
 };
 use rand::thread_rng;
 use tokio::io::AsyncWriteExt;
@@ -44,7 +39,9 @@ async fn main() -> anyhow::Result<()> {
         .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(60)))
         .build();
 
-    let addr_webrtc = Multiaddr::from(Ipv4Addr::UNSPECIFIED).with(Protocol::Udp(30333));
+    let addr_webrtc = Multiaddr::from(Ipv4Addr::UNSPECIFIED)
+        .with(Protocol::Udp(30333))
+        .with(Protocol::WebRTCDirect);
     let addr_tcp = Multiaddr::from(Ipv4Addr::UNSPECIFIED).with(Protocol::Tcp(30333));
 
     swarm.listen_on(addr_webrtc)?;
@@ -68,7 +65,7 @@ async fn load_or_generate_keypair() -> anyhow::Result<Keypair> {
     // Fetch the keypair from the /app/config/keypair.json file
     // If it doesn't exist, generate a new keypair and save it to the file
 
-    let file_path = "/app/config/keypair.json";
+    let file_path = "config/keypair.json";
     if tokio::fs::metadata(file_path).await.is_err() {
         let keypair = Keypair::generate_ed25519();
         let mut file = tokio::fs::File::create(file_path).await?;
@@ -83,7 +80,7 @@ async fn load_or_generate_keypair() -> anyhow::Result<Keypair> {
 
 #[derive(NetworkBehaviour)]
 struct Behaviour {
-    pub kad: kad::Behaviour<MemoryStore>,
+    pub kad: kad::Behaviour<kad::store::MemoryStore>,
     pub ping: ping::Behaviour,
     pub identify: identify::Behaviour,
     pub relay_server: relay::Behaviour,
@@ -97,10 +94,14 @@ impl Behaviour {
         relay_client: relay::client::Behaviour,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let peer_id = PeerId::from_public_key(&keypair.public());
-        let kad = kad::Behaviour::new(peer_id, MemoryStore::new(peer_id));
+        let kad = kad::Behaviour::with_config(
+            peer_id,
+            kad::store::MemoryStore::new(peer_id),
+            kad::Config::new(StreamProtocol::new("/libp2p/kad/1.0.0")),
+        );
         let ping = ping::Behaviour::new(ping::Config::new());
         let identify = identify::Behaviour::new(identify::Config::new(
-            "/ip4/0.0.0.0/udp/0".parse().unwrap(),
+            "/libp2p/kad-server/0.1.0".into(),
             keypair.public(),
         ));
         let relay_server = relay::Behaviour::new(peer_id, relay::Config::default());
