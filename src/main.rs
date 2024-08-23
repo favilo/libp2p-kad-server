@@ -1,6 +1,7 @@
 use std::{net::Ipv4Addr, time::Duration};
 
 use futures::StreamExt;
+use libp2p::mdns;
 use libp2p::{
     core::muxing::StreamMuxerBox, dcutr, identify, identity::Keypair, kad, multiaddr::Protocol,
     noise, ping, relay, swarm::NetworkBehaviour, tcp, yamux, Multiaddr, PeerId, StreamProtocol,
@@ -16,7 +17,8 @@ async fn main() -> anyhow::Result<()> {
         .try_init();
 
     let keypair = load_or_generate_keypair().await?;
-    tracing::info!("Loaded keypair: {}", PeerId::from(keypair.public()));
+    let peer_id = PeerId::from(keypair.public());
+    tracing::info!(?peer_id, "Loaded keypair");
 
     let mut swarm = SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
@@ -44,6 +46,17 @@ async fn main() -> anyhow::Result<()> {
         .with(Protocol::WebRTCDirect);
     let addr_tcp = Multiaddr::from(Ipv4Addr::UNSPECIFIED).with(Protocol::Tcp(30333));
 
+    // load dns address from command line
+    let dns_address = std::env::args().nth(1);
+    if let Some(dns_address) = dns_address {
+        let addr_dns = Multiaddr::empty()
+            .with(Protocol::Dns(dns_address.into()))
+            .with(Protocol::Tcp(80))
+            .with(Protocol::P2p(peer_id));
+        tracing::info!("DNS address: {}", addr_dns);
+        swarm.add_external_address(addr_dns);
+    }
+
     swarm.listen_on(addr_webrtc)?;
     swarm.listen_on(addr_tcp)?;
 
@@ -65,7 +78,7 @@ async fn load_or_generate_keypair() -> anyhow::Result<Keypair> {
     // Fetch the keypair from the /app/config/keypair.json file
     // If it doesn't exist, generate a new keypair and save it to the file
 
-    let file_path = "config/keypair.json";
+    let file_path = "./config/keypair.json";
     if tokio::fs::metadata(file_path).await.is_err() {
         let keypair = Keypair::generate_ed25519();
         let mut file = tokio::fs::File::create(file_path).await?;
@@ -86,6 +99,7 @@ struct Behaviour {
     pub relay_server: relay::Behaviour,
     pub relay_client: relay::client::Behaviour,
     pub dcutr: dcutr::Behaviour,
+    pub mdns: mdns::tokio::Behaviour,
 }
 
 impl Behaviour {
@@ -106,6 +120,7 @@ impl Behaviour {
         ));
         let relay_server = relay::Behaviour::new(peer_id, relay::Config::default());
         let dcutr = dcutr::Behaviour::new(peer_id);
+        let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), peer_id)?;
 
         Ok(Self {
             kad,
@@ -114,6 +129,7 @@ impl Behaviour {
             relay_server,
             relay_client,
             dcutr,
+            mdns,
         })
     }
 }
