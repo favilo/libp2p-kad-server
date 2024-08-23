@@ -1,12 +1,12 @@
 use std::{net::Ipv4Addr, time::Duration};
 
 use futures::StreamExt;
-use libp2p::mdns;
 use libp2p::{
     core::muxing::StreamMuxerBox, dcutr, identify, identity::Keypair, kad, multiaddr::Protocol,
     noise, ping, relay, swarm::NetworkBehaviour, tcp, yamux, Multiaddr, PeerId, StreamProtocol,
     SwarmBuilder, Transport as _,
 };
+use libp2p::{mdns, websocket};
 use rand::thread_rng;
 use tokio::io::AsyncWriteExt;
 
@@ -36,6 +36,8 @@ async fn main() -> anyhow::Result<()> {
             Ok(transport.map(|(peer_id, conn), _| (peer_id, StreamMuxerBox::new(conn))))
         })?
         .with_dns()?
+        .with_websocket(noise::Config::new, yamux::Config::default)
+        .await?
         .with_relay_client(noise::Config::new, yamux::Config::default)?
         .with_behaviour(Behaviour::from_key)?
         .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(60)))
@@ -45,6 +47,7 @@ async fn main() -> anyhow::Result<()> {
         .with(Protocol::Udp(30333))
         .with(Protocol::WebRTCDirect);
     let addr_tcp = Multiaddr::from(Ipv4Addr::UNSPECIFIED).with(Protocol::Tcp(30333));
+    // let addr_ws = Multiaddr::from(Ipv4Addr::UNSPECIFIED).with(Protocol::Tcp(30333));
 
     // load dns address from command line
     let dns_address = std::env::args().nth(1);
@@ -113,7 +116,7 @@ impl Behaviour {
             kad::store::MemoryStore::new(peer_id),
             kad::Config::new(StreamProtocol::new("/libp2p/kad/1.0.0")),
         );
-        let ping = ping::Behaviour::new(ping::Config::new());
+        let ping = ping::Behaviour::new(ping::Config::new().with_interval(Duration::from_secs(5)));
         let identify = identify::Behaviour::new(identify::Config::new(
             "/libp2p/kad-server/0.1.0".into(),
             keypair.public(),
